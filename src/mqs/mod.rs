@@ -1,7 +1,6 @@
 use std::io;
 use std::str;
-use std::any::Any;
-use std::marker::PhantomData;
+use std::collections::HashMap;
 use bytes::BytesMut;
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -10,24 +9,18 @@ use tokio_service::Service;
 use futures::{future, Future, BoxFuture};
 use serde_json;
 use serde;
+use serde::de::DeserializeOwned;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum Message {
-    EnqueueAny(String),
-    Enqueue(String, Vec<MessageGroup>),
-    Request(MessageGroup)
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct MessageGroup(u32);
+pub struct MessageGroup(String);
 
 pub struct MessageCodec;
 
 impl Decoder for MessageCodec {
-    type Item = Message;
+    type Item = String;
     type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<Message>> {
+    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<String>> {
         if let Some(i) = buf.iter().position(|&b| b == b'\n') {
             // remove the serialized frame from the buffer.
             let line = buf.split_to(i);
@@ -49,10 +42,10 @@ impl Decoder for MessageCodec {
 }
 
 impl Encoder for MessageCodec {
-    type Item = Message;
+    type Item = String;
     type Error = io::Error;
 
-    fn encode(&mut self, msg: Message, buf: &mut BytesMut) -> io::Result<()> {
+    fn encode(&mut self, msg: String, buf: &mut BytesMut) -> io::Result<()> {
         buf.extend(serde_json::to_string(&msg).expect("Could not serialize!").as_bytes());
         buf.extend(b"\n");
         Ok(())
@@ -62,8 +55,8 @@ impl Encoder for MessageCodec {
 pub struct MessageProto;
 
 impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for MessageProto {
-    type Request = Message;
-    type Response = Message;
+    type Request = String;
+    type Response = String;
     type Transport = Framed<T, MessageCodec>;
     type BindTransport = Result<Self::Transport, io::Error>;
 
@@ -72,17 +65,41 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for MessageProto {
     }
 }
 
-pub struct MessageQueue {
-    pub queue: Vec<Message>,
+pub struct MessageQueue<'a> {
+    pub queues: HashMap<&'a str, Vec<String>>,
 }
 
-impl Service for MessageQueue {
-    type Request = Message;
-    type Response = Message;
+impl<'a> Service for MessageQueue<'a> {
+    type Request = String;
+    type Response = String;
     type Error = io::Error;
     type Future = BoxFuture<Self::Response, Self::Error>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
         future::ok(req).boxed()
+    }
+}
+
+impl<'a> MessageQueue<'a> {
+    pub fn enqueue_any<T: serde::Serialize>(&mut self, body: T) -> Result<(), serde_json::Error> {
+        match serde_json::to_string(&body) {
+            Ok(s) => {
+                for (_, v) in self.queues.iter_mut() {
+                    v.push(s.clone());
+                };
+                Ok(())
+            }
+            Err(e) => Err(e)
+        }
+    }
+
+    pub fn get_all_messages<T: DeserializeOwned>(&self) -> Vec<(String, T)> {
+        let mut msgs = vec!();
+        for (&k, vs) in self.queues.iter() {
+            for v in vs {
+                msgs.push((String::from(k), serde_json::from_str(&v).unwrap()));
+            } 
+        }
+        msgs
     }
 }
