@@ -10,6 +10,7 @@ use futures::{future, Future, BoxFuture};
 use serde_json;
 use serde;
 use serde::de::DeserializeOwned;
+use std::sync::Mutex;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageGroup(String);
@@ -65,11 +66,13 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for MessageProto {
     }
 }
 
-pub struct MessageQueue<'a> {
-    pub queues: HashMap<&'a str, Vec<String>>,
+lazy_static! {
+    static ref QUEUES: Mutex<HashMap<&'static str, Vec<String>>> = Mutex::new(HashMap::new());
 }
 
-impl<'a> Service for MessageQueue<'a> {
+pub struct MessageQueue;
+
+impl Service for MessageQueue {
     type Request = String;
     type Response = String;
     type Error = io::Error;
@@ -80,11 +83,11 @@ impl<'a> Service for MessageQueue<'a> {
     }
 }
 
-impl<'a> MessageQueue<'a> {
-    pub fn enqueue_any<T: serde::Serialize>(&mut self, body: T) -> Result<(), serde_json::Error> {
+impl MessageQueue {
+    pub fn enqueue_any<T: serde::Serialize>(body: T) -> Result<(), serde_json::Error> {
         match serde_json::to_string(&body) {
             Ok(s) => {
-                for (_, v) in self.queues.iter_mut() {
+                for (_, v) in QUEUES.lock().unwrap().iter_mut() {
                     v.push(s.clone());
                 };
                 Ok(())
@@ -93,9 +96,9 @@ impl<'a> MessageQueue<'a> {
         }
     }
 
-    pub fn get_all_messages<T: DeserializeOwned>(&self) -> Vec<(String, T)> {
+    pub fn get_all_messages<T: DeserializeOwned>() -> Vec<(String, T)> {
         let mut msgs = vec!();
-        for (&k, vs) in self.queues.iter() {
+        for (&k, vs) in QUEUES.lock().unwrap().iter() {
             for v in vs {
                 msgs.push((String::from(k), serde_json::from_str(&v).unwrap()));
             } 
