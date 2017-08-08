@@ -1,6 +1,6 @@
 [package]
 name = "message_queue_service"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["ShuboshaKuro <Shubosha.Kuro@gmail.com>"]
 description = "A simple Message Queue implementation using Tokio and Serde"
 license = "MIT"
